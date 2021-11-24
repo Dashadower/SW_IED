@@ -1,0 +1,61 @@
+---
+title: "IR Distance Sensor Regression"
+output:
+  pdf_document: default
+  html_notebook: default
+header-includes:
+- \usepackage{xcolor}  
+---
+# 20212978
+
+## 1. Enter observed data:
+
+```{r}
+library(ggplot2)
+distance = data.frame(list(
+  "dist"=c(100,150,200,250,300,350,400),
+  "measure"=c(110,167,251,308,348,386,430)
+))
+ggplot(distance, aes(x=dist, y=measure)) + geom_point() + geom_abline()
+```
+
+## 2. Try log transformation
+
+```{r}
+ggplot(distance, aes(x=dist, y=log(measure))) + geom_point() + geom_abline()
+```
+
+
+## 3. Run non-linear least squares for simple log model
+
+$$f(dist) = \log(measure)$$
+$$f(dist) = multiplier \times \log(dist - x_{offset}) + y_{offset}$$
+
+```{r}
+b1 <- nls(log(measure) ~ multiplier * log(dist - x_offset) + y_offset, data=distance)
+b1
+```
+
+## 4. solve for inverse
+
+$$f(dist) = \log(measure)$$
+$$dist = f^{-1}(\log(measure))$$
+
+### find \(f^{-1}\)
+
+$$f(x) = multiplier \times \ln (x - x_{offset}) + y_{offset}$$
+$$f^{-1}(x) = \exp(\frac{x - y_{offset}}{multiplier}) + x_{offset}$$
+$$\therefore f^{-1}(\ln\ measure) = dist$$
+$$
+## 5. check result
+
+```{R}
+vals <- as.numeric(unlist(distance["measure"]))
+distance_fit = data.frame(list(
+  "measure"=as.numeric(unlist(distance["measure"])),
+  "fit"= exp((log(vals) - 1.9576)/0.7051) + 52.0695
+))
+ggplot() + geom_point(aes(x=measure, y=fit), data = distance_fit, color="red")
+```
+
+
