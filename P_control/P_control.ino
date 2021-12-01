@@ -3,10 +3,11 @@
 #define PIN_IR A0
 #define PIN_LED 9
 #define PIN_SERVO 10
-#define SAMPLING_INTERVAL 50
+#define SAMPLING_INTERVAL 20
 
 #define WARMUP_SECONDS 6
 
+#define ALPHA  0.5
 
 #define NOISE_COEFF 0.5
 #define LOOKBACK_AMOUNT 8
@@ -18,10 +19,10 @@
 
 #define _DUTY_MIN 553 // servo full clockwise position (0 degree), actual is 10 degrees
 #define _DUTY_MIN_DEG 10.0
-#define _DUTY_NEU 1420 // servo neutral position (90 degree)
+#define _DUTY_NEU 1460 // servo neutral position (90 degree)
 #define _DUTY_MAX 2399 // servo full counterclockwise position (180 degree), actual is 172 degrees
 #define _DUTY_MAX_DEG 172.0
-#define _SERVO_SPEED 20 // servo speed limit (unit: degree/second)
+#define _SERVO_SPEED 60 // servo speed limit (unit: degree/second)
 #define _SERVO_INTERVAL 20
 Servo myservo;
 float duty_chg_per_interval, duty_target, duty_curr; // maximum duty difference per interval
@@ -30,9 +31,9 @@ float duty_chg_per_interval, duty_target, duty_curr; // maximum duty difference 
 #define _DUTY_MIN_BOUND 1850  // lowest servo angle
 #define _DUTY_MAX_BOUND 950  // highest servo angle
 
-#define _DIST_TARGET_MIN 200.0 // target distance
-#define _DIST_TARGET_MAX 350.0
-#define _KP 0.08
+#define _DIST_TARGET_MIN 270 // target distance
+#define _DIST_TARGET_MAX 275
+#define _KP 0.021
 int error_curr;
 
 
@@ -47,27 +48,27 @@ int sampling_count = 0;
 unsigned long last_sampling_time = millis(), start_time, last_servo_time = millis();
 
 float ema_agg = 0.0, dist_ema;
-#define ALPHA  0.35
 
 float deg2duty(float rail_deg){
   if(abs(rail_deg) < 0.1) return _DUTY_NEU;
   const float duty_per_deg = (_DUTY_MAX - _DUTY_MIN)/(_DUTY_MAX_DEG-_DUTY_MIN_DEG);
-  const float servo_deg = -2.6297 + rail_deg * 3.0281;
+  const float servo_deg = 0.8607614114944276 + rail_deg * 3.1058577946956762;
+  //Serial.println(servo_deg);
   return _DUTY_NEU + duty_per_deg * servo_deg;
 }
 
 
 float calculate_error(float curr_dist){
   if((_DIST_TARGET_MIN < curr_dist) && (_DIST_TARGET_MAX > curr_dist)){
-    Serial.print("in_rage");
+    //Serial.print("in_rage");
     return 0;
   }
   else if(_DIST_TARGET_MIN > curr_dist){
-    Serial.print("undershoot");
+    //Serial.print("undershoot");
     return _DIST_TARGET_MIN - curr_dist;
   }
   else if(_DIST_TARGET_MAX < curr_dist){
-    Serial.print("overshoot");
+    //Serial.print("overshoot");
     return _DIST_TARGET_MAX - curr_dist;
   }
 }
@@ -165,38 +166,41 @@ void loop() {
     }
   }
 
-  x_out = isnan(x_out)? raw_dist: x_out;
+  x_out = isnan(x_out)? x_current: x_out;
+  if(x_out <= 150 || x_out >= 400){
+    x_out = x_current;
+  }
   dist_ema = ALPHA * x_out + (1.0 - ALPHA) * ema_agg;
   ema_agg = dist_ema;
 
   //error_curr = _DIST_TARGET - dist_ema;
   error_curr = calculate_error(dist_ema);
-  int pterm = _KP * error_curr;
+  float pterm = _KP * error_curr;
   duty_target = min(max(deg2duty(pterm), _DUTY_MAX_BOUND), _DUTY_MIN_BOUND);
-  Serial.print(" raw_dist:");
-  Serial.print(raw_dist);
-  Serial.print(" x_current:");
-  Serial.print(x_current);
+//  Serial.print(" raw_dist:");
+//  Serial.print(raw_dist);
+//  Serial.print(" x_current:");
+//  Serial.print(x_current);
 //  Serial.print(" dist_ema:");
 //  Serial.print(dist_ema, 4);
+//  Serial.print(" duty_target:");
+//  Serial.print(duty_target);
+  Serial.print(" error_curr:");
+  Serial.print(error_curr);
+//  Serial.print(" angle:");
+
+//  Serial.print(" duty_per_deg");
+//  Serial.print((_DUTY_MAX - _DUTY_MIN)/(_DUTY_MAX_DEG-_DUTY_MIN_DEG));
+  Serial.print(" Low:200 High:350 dist:");
+  Serial.print(dist_ema);
+  Serial.print(" pterm:"); 
+  Serial.print(pterm);
   Serial.print(" duty_target:");
   Serial.print(duty_target);
-  Serial.print(" error_curr:");
-  Serial.println(error_curr);
+  Serial.print(" duty_curr:");
+  Serial.println(duty_curr);
 
-//
-//  Serial.print(" x_out:");
-//  Serial.print(x_out, 4);
-//  Serial.print(" dist_ema:");
-//  Serial.print(dist_ema, 4);
-//  Serial.print(" ema_Agg:");
-//  Serial.print(ema_agg, 4);
-//  Serial.print(" is_interpolate:");
-//  Serial.print(is_interpolate);
-//  Serial.print(" v_t:");
-//  Serial.print(v_current, 4);
-//  Serial.print(" a_t:");
-//  Serial.println(a_current, 4);
+
   x_last = x_current;
   v_last = v_current;
   a_last = a_current;
