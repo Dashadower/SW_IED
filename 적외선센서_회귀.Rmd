@@ -29,7 +29,7 @@ ggplot(distance, aes(x=dist, y=log(measure))) + geom_point() + geom_abline()
 ## 3. Run non-linear least squares for simple log model
 
 $$f(dist) = \log(measure)$$
-$$f(dist) = multiplier \times \log(dist - x_{offset}) + y_{offset}$$
+$$f(dist) = multiplier \times￩ \log(dist - x_{offset}) + y_{offset}$$
 
 ```{r}
 b1 <- nls(log(measure) ~ multiplier * log(dist - x_offset) + y_offset, data=distance)
