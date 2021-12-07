@@ -9,8 +9,9 @@
 
 #define ALPHA  0.5
 
-#define NOISE_COEFF 0.5
-#define LOOKBACK_AMOUNT 8
+#define NOISE_COEFF 0.4
+#define LOOKBACK_AMOUNT 5
+#define LOOKBACK_DISCARD 2
 
 #define SENSOR_OFFSET 15
 #define A 103  // distance measure at 10cm
@@ -22,8 +23,8 @@
 #define _DUTY_NEU 1460 // servo neutral position (90 degree)
 #define _DUTY_MAX 2399 // servo full counterclockwise position (180 degree), actual is 172 degrees
 #define _DUTY_MAX_DEG 172.0
-#define _SERVO_SPEED 60 // servo speed limit (unit: degree/second)
-#define _SERVO_INTERVAL 20
+#define _SERVO_SPEED 120 // servo speed limit (unit: degree/second)
+#define _SERVO_INTERVAL 30
 Servo myservo;
 float duty_chg_per_interval, duty_target, duty_curr; // maximum duty difference per interval
 
@@ -31,29 +32,32 @@ float duty_chg_per_interval, duty_target, duty_curr; // maximum duty difference 
 #define _DUTY_MIN_BOUND 1850  // lowest servo angle
 #define _DUTY_MAX_BOUND 950  // highest servo angle
 
-#define _DIST_TARGET_MIN 270 // target distance
-#define _DIST_TARGET_MAX 275
+#define _DIST_TARGET_MIN 250 // target distance
+#define _DIST_TARGET_MAX 255
+//#define _KP 0.021
+//#define _KD 0.06
 #define _KP 0.021
-#define _KD 0.06
+#define _KD 0.7
+float pterm, dterm;
 float error_curr, error_last = 0;
 
 
 float x_out, x_current = 0, x_last = 0, v_current = 0, v_last = 0, a_current = 0, a_last = 0, x_stable, v_stable;
 float acc_lookback[LOOKBACK_AMOUNT];
 float vel_lookback[LOOKBACK_AMOUNT];
-int lookback_index = 0;
+unsigned long lookback_index = 0;
 
 float a_sum = 0, a_mean;
 
 int sampling_count = 0;
-unsigned long last_sampling_time = millis(), start_time, last_servo_time = millis();
+unsigned long last_sampling_time = millis(), start_time, last_servo_time = millis(), last_print_time = millis();
 
 float ema_agg = 0.0, dist_ema;
 
 float deg2duty(float rail_deg){
   if(abs(rail_deg) < 0.1) return _DUTY_NEU;
   const float duty_per_deg = (_DUTY_MAX - _DUTY_MIN)/(_DUTY_MAX_DEG-_DUTY_MIN_DEG);
-  const float servo_deg = 0.8607614114944276 + rail_deg * 3.1058577946956762;
+  float servo_deg = 0.8607614114944276 + rail_deg * 3.1058577946956762;
   //Serial.println(servo_deg);
   return _DUTY_NEU + duty_per_deg * servo_deg;
 }
@@ -102,28 +106,35 @@ void setup() {
 
 int is_interpolate = 0;
 
+bool is_sample = false;
+
 void loop() {
+  is_sample = false;
   unsigned long time_curr = millis();
-  if(last_servo_time + _SERVO_INTERVAL > time_curr){
+
+  if(last_servo_time + _SERVO_INTERVAL < time_curr || last_servo_time == 0){
     last_servo_time = time_curr;
-      if(duty_target > duty_curr) {
-        duty_curr += duty_chg_per_interval;
-        if(duty_curr > duty_target) duty_curr = duty_target;
-      }
-      else {
-        duty_curr -= duty_chg_per_interval;
-        if(duty_curr < duty_target) duty_curr = duty_target;
-      }
-      myservo.writeMicroseconds(duty_curr);
+    if(duty_target > duty_curr) {
+      duty_curr += min(abs(duty_target - duty_curr), duty_chg_per_interval);
+      if(duty_curr > duty_target) duty_curr = duty_target;
+      
+    }
+    else if (duty_target < duty_curr){
+      duty_curr -= min(abs(duty_target - duty_curr), duty_chg_per_interval);
+      if(duty_curr < duty_target) duty_curr = duty_target;
+    }
+     myservo.writeMicroseconds(duty_curr); 
   }
-  if(last_sampling_time + SAMPLING_INTERVAL > time_curr) return;
-  last_sampling_time = time_curr;
+  if(last_sampling_time + SAMPLING_INTERVAL < time_curr) {
+    is_sample = true;
+    last_sampling_time = time_curr;
+  }
+  
   float raw_dist = ir_distance();
   x_current = exp((log(raw_dist) - 1.9576)/0.7051) + 52.0695 + SENSOR_OFFSET + BALL_RADIUS;
 
   float v_current = (x_current - x_last)/SAMPLING_INTERVAL;
   float a_current = (v_current - v_last)/SAMPLING_INTERVAL;
-
   if(time_curr < start_time + 1000 * WARMUP_SECONDS){
     sampling_count++;
     a_sum = a_sum + abs(a_current);
@@ -133,13 +144,13 @@ void loop() {
     a_last = a_current;
     return;
   }
-  else{
-    // inertial interpolation
+  if(is_sample){
     if(abs(a_current) > a_mean * NOISE_COEFF){
       float acc_lookback_mean = 0, vel_lookback_mean = 0;
       int lookback_count = 0;
       for(int i = 0; i < LOOKBACK_AMOUNT; i++){
           if (isnan(acc_lookback[i])) continue;
+          if (i >= LOOKBACK_AMOUNT - LOOKBACK_DISCARD) continue;
   
           acc_lookback_mean = acc_lookback_mean + acc_lookback[i];
           vel_lookback_mean = vel_lookback_mean + vel_lookback[i];
@@ -165,46 +176,53 @@ void loop() {
       lookback_index++;
       is_interpolate = 0;
     }
-  }
+    x_out = isnan(x_out)? x_current: x_out;
+    if(x_out <= 150 || x_out >= 400){
+      x_out = x_current;
+    }
+    dist_ema = ALPHA * x_out + (1.0 - ALPHA) * ema_agg;
+    ema_agg = dist_ema;
 
-  x_out = isnan(x_out)? x_current: x_out;
-  if(x_out <= 150 || x_out >= 400){
-    x_out = x_current;
+    error_curr = calculate_error(dist_ema);
+    pterm = _KP * error_curr;
+    dterm = _KD * (error_curr - error_last);
+    duty_target = min(max(deg2duty(pterm + dterm), _DUTY_MAX_BOUND), _DUTY_MIN_BOUND);
+    error_last = error_curr;
+
+    x_last = x_current;
+    v_last = v_current;
+    a_last = a_current;
   }
-  dist_ema = ALPHA * x_out + (1.0 - ALPHA) * ema_agg;
-  ema_agg = dist_ema;
+    
+
+  
+  
 
   //error_curr = _DIST_TARGET - dist_ema;
-  error_curr = calculate_error(dist_ema);
-  float pterm = _KP * error_curr;
-  float dterm = _KD * (error_curr - error_last);
-  duty_target = min(max(deg2duty(pterm + dterm), _DUTY_MAX_BOUND), _DUTY_MIN_BOUND);
-//  Serial.print(" raw_dist:");
-//  Serial.print(raw_dist);
-//  Serial.print(" x_current:");
-//  Serial.print(x_current);
-//  Serial.print(" dist_ema:");
-//  Serial.print(dist_ema, 4);
-//  Serial.print(" duty_target:");
-//  Serial.print(duty_target);
-  Serial.print(" error_curr:");
-  Serial.print(error_curr);
-//  Serial.print(" angle:");
 
-//  Serial.print(" duty_per_deg");
-//  Serial.print((_DUTY_MAX - _DUTY_MIN)/(_DUTY_MAX_DEG-_DUTY_MIN_DEG));
-  Serial.print(" Low:200 High:350 dist:");
-  Serial.print(dist_ema);
-  Serial.print(" pterm:"); 
-  Serial.print(pterm);
-  Serial.print(" duty_target:");
-  Serial.print(duty_target);
-  Serial.print(" duty_curr:");
-  Serial.println(duty_curr);
+//  Serial.print(last_print_time);
+//  Serial.print(" ");
+//  Serial.println(time_curr);
+  if(last_print_time + 20 < time_curr || last_print_time == 0){
+    last_print_time = time_curr;
+    Serial.print(" dist_raw:");
+    Serial.print(x_current);
+    Serial.print(" dist_ema:");
+    Serial.print(dist_ema, 4);
+    Serial.print(" error_curr:");
+    Serial.print(error_curr);
+    Serial.print(" Low:200 High:350 dist_target: 255");
+    Serial.print(" pterm:"); 
+    Serial.print(pterm);
+    Serial.print(" dterm:"); 
+    Serial.print(dterm, 5);
+    Serial.print(" duty_target:");
+    Serial.print(duty_target);
+    Serial.print(" duty_curr:");
+    Serial.println(duty_curr);
+    Serial.println();
+  }
 
 
-  x_last = x_current;
-  v_last = v_current;
-  a_last = a_current;
-  error_last = error_curr;
+  
 }
